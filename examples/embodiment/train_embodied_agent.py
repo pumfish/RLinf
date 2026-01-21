@@ -45,6 +45,12 @@ def main(cfg) -> None:
         from rlinf.workers.actor.fsdp_sac_policy_worker import EmbodiedSACFSDPPolicy
 
         actor_worker_cls = EmbodiedSACFSDPPolicy
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    if cfg.algorithm.loss_type == "fql_actor_critic":
+        from rlinf.workers.actor.fsdp_fql_policy_worker import EmbodiedFQLFSDPPolicy
+
+        actor_worker_cls = EmbodiedFQLFSDPPolicy
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
     else:
         from rlinf.workers.actor.fsdp_actor_worker import EmbodiedFSDPActor
 

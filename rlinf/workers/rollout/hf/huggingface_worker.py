@@ -115,6 +115,9 @@ class MultiStepRolloutWorker(Worker):
             SupportedModel.MLP_POLICY,
             SupportedModel.GR00T,
             SupportedModel.CNN_POLICY,
+            # >>>>>>>>>>>>>>>>>>>>>>>>
+            SupportedModel.OPENPI_FQL,
+            # <<<<<<<<<<<<<<<<<<<<<<<<
         ]:
             kwargs = {"mode": mode}
 
@@ -248,9 +251,20 @@ class MultiStepRolloutWorker(Worker):
                         )
 
                     extracted_obs = self.hf_model.preprocess_env_obs(env_output["obs"])
-                    dones, rewards, real_extracted_obs = self.get_dones_and_rewards(
-                        env_output, extracted_obs
-                    )
+                    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+                    if hasattr(self.hf_model, "onestep"):
+                        dones, rewards, real_extracted_obs = self.get_dones_and_rewards(
+                            env_output,
+                            self.hf_model.preprocess_env_obs_extra(extracted_obs)
+                        )
+                    else:
+                        dones, rewards, real_extracted_obs = self.get_dones_and_rewards(
+                            env_output, extracted_obs
+                        )
+                    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+                    # dones, rewards, real_extracted_obs = self.get_dones_and_rewards(
+                    #     env_output, extracted_obs
+                    # )
                     actions, result = self.predict(extracted_obs)
                     chunk_step_result = ChunkStepResult(
                         prev_logprobs=result["prev_logprobs"],
@@ -268,7 +282,13 @@ class MultiStepRolloutWorker(Worker):
                         self.buffer_list[stage_id].add_transition(
                             last_extracted_obs[stage_id], real_extracted_obs
                         )
-                    last_extracted_obs[stage_id] = extracted_obs
+                    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+                    if hasattr(self.hf_model, "onestep"):
+                        last_extracted_obs[stage_id] = self.hf_model.preprocess_env_obs_extra(extracted_obs)
+                    else:
+                        last_extracted_obs[stage_id] = extracted_obs
+                    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+                    # last_extracted_obs[stage_id] = extracted_obs
                     last_forward_inputs[stage_id] = result["forward_inputs"]
 
                     self.send_chunk_actions(output_channel, actions)
@@ -281,9 +301,20 @@ class MultiStepRolloutWorker(Worker):
 
                 extracted_obs = self.hf_model.preprocess_env_obs(env_output["obs"])
                 # Get dones and rewards from environment batch (final step of epoch)
-                dones, rewards, real_extracted_obs = self.get_dones_and_rewards(
-                    env_output, extracted_obs
-                )
+                # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+                if hasattr(self.hf_model, "onestep"):
+                    dones, rewards, real_extracted_obs = self.get_dones_and_rewards(
+                        env_output,
+                        self.hf_model.preprocess_env_obs_extra(extracted_obs)
+                    )
+                else:
+                    dones, rewards, real_extracted_obs = self.get_dones_and_rewards(
+                        env_output, extracted_obs
+                    )
+                # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+                # dones, rewards, real_extracted_obs = self.get_dones_and_rewards(
+                #     env_output, extracted_obs
+                # )
                 self.buffer_list[stage_id].dones.append(dones)
                 self.buffer_list[stage_id].truncations.append(env_output["truncations"])
                 self.buffer_list[stage_id].terminations.append(
@@ -296,6 +327,7 @@ class MultiStepRolloutWorker(Worker):
 
                 with self.worker_timer():
                     actions, result = self.predict(extracted_obs)
+                # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
                 # For the final step, we only need prev_values for bootstrapping
                 # This is a special case that doesn't create a full ChunkStepResult
                 if "prev_values" in result:

@@ -330,6 +330,91 @@ def get_model(cfg: DictConfig, override_config_kwargs=None):
         model_config = CNNConfig()
         model_config.update_from_dict(OmegaConf.to_container(cfg, resolve=True))
         model = CNNPolicy(model_config)
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    elif model_type == SupportedModel.OPENPI_FQL:
+        import glob
+
+        import openpi.shared.download as download
+        import openpi.transforms as transforms
+        import safetensors
+        from openpi.training import checkpoints as _checkpoints
+
+        from .embodiment.openpi import get_openpi_config
+        from .embodiment.fql_openpi_action_model import (
+            FQLOpenPi0Config,
+            FQLOpenPi0ForRLActionPrediction,
+        )
+
+        # config
+        config_name = getattr(cfg.openpi, "config_name", None)
+        actor_train_config = get_openpi_config(config_name, model_path=model_path)
+        actor_model_config = actor_train_config.model
+        actor_model_config = FQLOpenPi0Config(**actor_model_config.__dict__)
+        override_config_kwargs = cfg.openpi
+        if override_config_kwargs is not None:
+            for key, val in override_config_kwargs.items():
+                actor_model_config.__dict__[key] = val
+        # load model
+        checkpoint_dir = download.maybe_download(str(model_path))
+        weight_paths = sorted(glob.glob(os.path.join(checkpoint_dir, "*.safetensors")))
+        if not weight_paths:
+            weight_paths = [os.path.join(checkpoint_dir, "model.safetensors")]
+
+        model: FQLOpenPi0ForRLActionPrediction = FQLOpenPi0ForRLActionPrediction(
+            actor_model_config
+        )
+        # train expert only
+        if actor_model_config.train_expert_only:
+            model.freeze_vlm()
+
+        for weight_path in weight_paths:
+            safetensors.torch.load_model(model, weight_path, strict=False)
+        model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
+        # load for onestep
+        if hasattr(model, "onestep"):
+            teacher_state_dict = safetensors.torch.load_file(weight_paths[-1])
+            model.onestep.load_pi0_weight_to_onestep(teacher_state_dict)
+
+        # fsdp replace
+        # model.paligemma_with_expert.replace_gemma_decoder_layers()
+        # load data stats
+        data_config = actor_train_config.data.create(
+            actor_train_config.assets_dirs, actor_model_config
+        )
+        norm_stats = None
+        if norm_stats is None:
+            # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure
+            # that the policy is using the same normalization stats as the original training process.
+            if data_config.asset_id is None:
+                raise ValueError("Asset id is required to load norm stats.")
+            norm_stats = _checkpoints.load_norm_stats(
+                checkpoint_dir, data_config.asset_id
+            )
+        # wrappers
+        repack_transforms = transforms.Group()
+        default_prompt = None
+        model.setup_wrappers(
+            transforms=[
+                *repack_transforms.inputs,
+                transforms.InjectDefaultPrompt(default_prompt),
+                *data_config.data_transforms.inputs,
+                transforms.Normalize(
+                    norm_stats, use_quantiles=data_config.use_quantile_norm
+                ),
+                *data_config.model_transforms.inputs,
+            ],
+            output_transforms=[
+                *data_config.model_transforms.outputs,
+                transforms.Unnormalize(
+                    norm_stats, use_quantiles=data_config.use_quantile_norm
+                ),
+                *data_config.data_transforms.outputs,
+                *repack_transforms.outputs,
+            ],
+        )
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+
     else:
         return None
     if torch.cuda.is_available():
