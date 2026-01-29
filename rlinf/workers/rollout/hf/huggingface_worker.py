@@ -15,6 +15,8 @@
 import copy
 import gc
 from typing import Any
+import math
+import random
 
 import torch
 from omegaconf import DictConfig, OmegaConf, open_dict
@@ -122,6 +124,19 @@ class MultiStepRolloutWorker(Worker):
             kwargs = {"mode": mode}
 
         kwargs["return_obs"] = not hasattr(self.hf_model, "q_head")
+
+        # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+        # Modify for warmup.
+        if mode == "train" and \
+                getattr(self.cfg.actor, "warmup_buffer", False):
+            max_steps = self.get_max_steps()
+            progress = min(self.global_step / max_steps, 1.0)
+            p_student = self.student_prob(progress)
+            if random.random() < p_student:
+                kwargs["rollout_source"] = "student"
+            else:
+                kwargs["rollout_source"] = "teacher"
+        # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
         with torch.no_grad():
             actions, result = self.hf_model.predict_action_batch(
@@ -408,3 +423,26 @@ class MultiStepRolloutWorker(Worker):
     def set_global_step(self, global_step):
         if hasattr(self.hf_model, "set_global_step"):
             self.hf_model.set_global_step(global_step)
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    # Modify for warmup.
+        self.global_step = global_step
+
+    def get_max_steps(self):
+        if not hasattr(self, "max_steps"):
+            self.max_steps = self.cfg.runner.max_epochs
+            if(max_step := self.cfg.runner.get("max_steps", -1)) >= 0:
+                self.max_steps = min(self.max_steps, max_step)
+        return self.max_steps
+
+    def student_prob(self, progress, schedule_type="cos"):
+        if schedule_type == "linear":
+            return progress
+        elif schedule_type == "cos":
+            return 0.5 * (1 - math.cos(progress * math.pi))
+        elif schedule_type == "sigmoid":
+            k = getattr(self.cfg.actor, "warmup_k", 10)
+            x = (progress - 0.5) * k
+            return 1 / (1 + math.exp(-x))
+        else:
+            raise ValueError(f"Unknown warmup schedule type: {self.schedule_type}")
+    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<

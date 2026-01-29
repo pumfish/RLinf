@@ -599,6 +599,7 @@ class FQLOpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
         mode: Literal["train", "eval"] = "train",
         compute_values=True,
         return_obs=True,
+        rollout_source: Literal["teacher", "student"] = "student",
     ) -> tuple[np.ndarray, dict[str, Any]]:
         if "main_images" in env_obs.keys():
             to_process_obs = self.obs_processor(env_obs)  # env obs -> policy input obs
@@ -612,21 +613,25 @@ class FQLOpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
         )  # obs precision processor
         observation = _model.Observation.from_dict(processed_obs)
         outputs = self.sample_actions(
-            observation, mode=mode, compute_values=compute_values
+            observation,
+            mode=mode,
+            compute_values=compute_values,
+            need_onestep=(rollout_source == "student"),
         )
         actions = self.output_transform(
             {"actions": outputs["actions"], "state": observation.state}
         )["actions"].numpy()
 
-        onestep_actions = self.output_transform(
-            {"actions": outputs["onestep_actions"], "state": observation.state}
-        )["actions"].numpy()
+        # onestep_actions = self.output_transform(
+        #     {"actions": outputs["onestep_actions"], "state": observation.state}
+        # )["actions"].numpy()
         forward_inputs = {
             "chains": outputs["chains"],
             "denoise_inds": outputs["denoise_inds"],
             "tokenized_prompt": processed_obs["tokenized_prompt"],
             "tokenized_prompt_mask": processed_obs["tokenized_prompt_mask"],
-            "action": outputs["onestep_actions"], ## add pre_output_transform actions for batch['actions']
+            "action": outputs["actions"],
+            # "action": outputs["onestep_actions"], ## add pre_output_transform actions for batch['actions']
         }
         forward_inputs.update(to_process_obs)
         forward_inputs.pop("prompt", None)
@@ -634,12 +639,12 @@ class FQLOpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
             "prev_logprobs": outputs["prev_logprobs"],
             "prev_values": outputs["prev_values"],
             "forward_inputs": forward_inputs,
-            "onestep_actions": onestep_actions,
-            "teacher_actions": actions,
-            "pre_onestep_actions": outputs["onestep_actions"],
+            # "onestep_actions": onestep_actions,
+            # "teacher_actions": actions,
+            # "pre_onestep_actions": outputs["onestep_actions"],
         }
         # Follow FQL online finetune, rollout/predciton return onestep_actions
-        return onestep_actions, result
+        return actions, result
 
     @torch.no_grad()
     def sample_actions(
@@ -648,6 +653,7 @@ class FQLOpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
         noise=None,
         mode="train",
         compute_values=True,
+        need_onestep=False,
     ) -> torch.Tensor:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
         bsize = observation.state.shape[0]
@@ -759,16 +765,19 @@ class FQLOpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
 
         # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
         # Get onestep actions
-        prefix_kv_cache = (state, prefix_pad_masks, past_key_values)
-        onestep_actions = self.onestep(observation, prefix_kv_cache)
+        actions = x_0
+        if need_onestep:
+            prefix_kv_cache = (state, prefix_pad_masks, past_key_values)
+            onestep_actions = self.onestep(observation, prefix_kv_cache)
+            actions = onestep_actions
         # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
         return {
-            "actions": x_0,
+            "actions": actions,
             "chains": chains,
             "prev_logprobs": log_probs,
             "prev_values": values,
             "denoise_inds": denoise_inds,
-            "onestep_actions": onestep_actions
+            # "onestep_actions": onestep_actions
         }
 
     def sample_mean_var_val(
