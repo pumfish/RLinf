@@ -182,7 +182,6 @@ class EmbodiedFQLFSDPPolicy(EmbodiedFSDPActor):
         self.demo_buffer = SACReplayBuffer.create_from_buffer(
             demo_data, seed=self.cfg.actor.seed
         )
-        et
     # Forward function
     # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     def forward_critic(self, batch):
@@ -316,7 +315,7 @@ class EmbodiedFQLFSDPPolicy(EmbodiedFSDPActor):
         q_loss = -q.mean()
         # optional: normalize Q loss scale
         if self.cfg.algorithm.get("normalize_q_loss", False):
-            lam = (1.0 / q.abs().mean()).detach
+            lam = (1.0 / q.abs().mean()).detach()
             q_loss = lam * q_loss
 
         fql_alpha = self.cfg.algorithm.get("fql_alpha", 10.0)
