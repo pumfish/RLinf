@@ -83,6 +83,7 @@ class OneStepStudent(nn.Module):
 
         self.gemma_expert = GemmaForCausalLM(config=action_expert_config_hf)
         self.gemma_expert.model.embed_tokens = None
+        self.gemma_expert.to(dtype=torch.bfloat16)
         # self.to_bfloat16_for_selected_params(precision)
 
         torch.set_float32_matmul_precision("high")
@@ -250,7 +251,7 @@ class OneStepStudent(nn.Module):
         assert inputs_embeds[0] is None, "action expert only use suffix_embs"
         if adarms_cond is None:
             adarms_cond = [None, None]
-        suffix = self.gemma_expert.model.forward(
+        suffix_output = self.gemma_expert.model.forward(
             inputs_embeds=inputs_embeds[1],
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -258,7 +259,7 @@ class OneStepStudent(nn.Module):
             use_cache=use_cache,
             adarms_cond=adarms_cond[1] if adarms_cond is not None else None,
         )
-        suffix_outut = suffix_output.last_hidden_state
+        suffix_output = suffix_output.last_hidden_state
         prefix_output = None
         prefix_past_key_values = None
         return [prefix_output, suffix_output], prefix_past_key_values
@@ -276,8 +277,8 @@ class OneStepStudent(nn.Module):
                 self.embed_suffix(state, x_t, timestep)
 
         suffix_len = suffix_pad_masks.shape[1]
-        batch_size = suffix_pad_masks.shape[0]
-        prefix_len = suffix_pad_masks.shape[1]
+        batch_size = prefix_pad_masks.shape[0]
+        prefix_len = prefix_pad_masks.shape[1]
 
         prefix_pad_2d_masks = prefix_pad_masks[:, None, :].expand(batch_size, suffix_len, prefix_len)
         suffix_att_2d_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
@@ -291,12 +292,12 @@ class OneStepStudent(nn.Module):
         self.gemma_expert.model.config._attn_implementation = "eager"
 
         outputs_embeds, _ = self.action_expert_forward(
-            attention_masks=full_att_2d_masks_4d,
+            attention_mask=full_att_2d_masks_4d,
             position_ids=position_ids,
             past_key_values=past_key_values,
             inputs_embeds=[None, suffix_embs],
             use_cache=False,
-            adarms_cond=[None, adarms_cond]
+            adarms_cond=[None, adarms_cond],
         )
 
         suffix_out = outputs_embeds[1]
@@ -314,6 +315,7 @@ class OneStepStudent(nn.Module):
         if noise is None:
             actions_shape = (bsize, self.config.action_horizon, self.config.action_dim)
             noise = self.sample_noise(actions_shape, device)
+        noise = noise.requires_grad_(True)
 
         # We get prefix out from externel.
         # state, prefix_pad_masks, past_key_values = get_prefix_out_from_pi0(observation)
@@ -324,7 +326,7 @@ class OneStepStudent(nn.Module):
         dt = torch.tensor(dt_src, dtype=torch.float32, device=device)
 
         x_t = noise
-        time = torch.tensor(dt_src, dtype=torch.float32, device=device)
+        time = torch.tensor(1.0, dtype=torch.float32, device=device)
         while time >= -dt / 2:
             expanded_time = time.expand(bsize)
             v_t = self.denoise_step(
@@ -343,6 +345,7 @@ class OneStepStudent(nn.Module):
     def load_pi0_weight_to_onestep(self, state_dict):
         """Load params from PI0 model.safetensors
         """
+        print("[WARN] Loading teacher weights into OneStepStudent (init only!)")
         with torch.no_grad():
             # action_proj
             for name in ["action_in_proj", "action_out_proj"]:
